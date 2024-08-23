@@ -1,0 +1,217 @@
+trigger: none
+pr: none
+resources:
+  webhooks:
+  - webhook: WebhookPRtest         
+    connection: WebhookPRtestConnection
+    filters:
+    - path: "action"
+      value: "labeled"
+      
+variables:
+  - name: AZURE_RESOURCE_GROUP
+    value: 'POCNextJS'
+  - name: LOCATION
+    value: 'eastus2'
+  - name: NEXT_PUBLIC_MESSAGE
+    value: 'test MSG'
+  - name: StaticEmptyWebApp
+    value: 'TestStaticWebApp'
+    
+stages:
+- stage: BuildAndDeploy
+  jobs:
+  - job: DeployStaticPREnvironment
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - template: templates/label-to-check.yaml
+      parameters:
+        labelToCheck: 'Create Static Variant1'
+        variableName: 'createEnvironmentFound'
+        prLabels: ${{ parameters.WebhookPRtest.pull_request.labels }}
+
+    - template: templates/label-to-check.yaml
+      parameters:
+        labelToCheck: 'Create Static Variant2'
+        variableName: 'createEnvironmentBFound'
+        prLabels: ${{ parameters.WebhookPRtest.pull_request.labels }}
+    
+    - template: templates/label-to-check.yaml
+      parameters:
+        labelToCheck: 'Create Static Variant1'
+        variableName: 'createEnvironmentWAFound'
+        prLabels: ${{ parameters.WebhookPRtest.pull_request.labels }}
+
+    - template: templates/label-to-check.yaml
+      parameters:
+        labelToCheck: 'Create Static Variant2'
+        variableName: 'createEnvironmentWABFound'
+        prLabels: ${{ parameters.WebhookPRtest.pull_request.labels }}
+
+
+    - task: AzureCLI@2
+      name: CheckVariant1
+      condition: eq(variables['createEnvironmentFound'], 'true')
+      inputs:
+        azureSubscription: 'radek-padrta-vs-msp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          PR_VARIANT="${{parameters.WebhookPRtest.pull_request.id}}v1"
+          EXISTS=$(az staticwebapp environment list -n $(StaticEmptyWebApp) -o tsv --query "[?buildId=='$PR_VARIANT'].buildId" | grep -q "$PR_VARIANT" && echo "true" || echo "false")
+          echo "##vso[task.setvariable variable=VARIANT1_EXISTS;isOutput=true]$EXISTS"
+          if [ "$EXISTS" = "true" ]; then
+            URL=$(az staticwebapp environment list -n $(StaticEmptyWebApp) -o tsv --query "[?buildId=='$PR_VARIANT'].hostname")
+            echo "##vso[task.setvariable variable=VARIANT1_URL;isOutput=true]$URL"
+          fi
+          
+    - task: AzureCLI@2
+      name: CheckVariant2
+      condition: eq(variables['createEnvironmentBFound'], 'true')
+      inputs:
+        azureSubscription: 'radek-padrta-vs-msp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          PR_VARIANT2="${{parameters.WebhookPRtest.pull_request.id}}v2"
+          EXISTS=$(az staticwebapp environment list -n $(StaticEmptyWebApp) -o tsv --query "[?buildId=='$PR_VARIANT2'].buildId" | grep -q "$PR_VARIANT2" && echo "true" || echo "false")
+          echo "##vso[task.setvariable variable=VARIANT2_EXISTS;isOutput=true]$EXISTS"
+          if [ "$EXISTS" = "true" ]; then
+            URL=$(az staticwebapp environment list -n $(StaticEmptyWebApp) -o tsv --query "[?buildId=='$PR_VARIANT2'].hostname")
+            echo "##vso[task.setvariable variable=VARIANT2_URL;isOutput=true]$URL"
+          fi
+
+    - task: Bash@3
+      name: DisplayResults
+      inputs:
+        targetType: 'inline'
+        script: |
+          echo "Variant1 exists: $(CheckVariant1.VARIANT1_EXISTS)"
+          echo "Variant2 exists: $(CheckVariant2.VARIANT2_EXISTS)"
+          [ "$(CheckVariant1.VARIANT1_EXISTS)" = "true" ] && echo "Variant1 URL: $(CheckVariant1.VARIANT1_URL)" || echo "Variant1 URL not available"
+          [ "$(CheckVariant2.VARIANT2_EXISTS)" = "true" ] && echo "Variant2 URL: $(CheckVariant2.VARIANT2_URL)" || echo "Variant2 URL not available"
+    - task: GitHubComment@0
+      displayName: 'Comment GH - Starting Static Variant1'
+      condition: and(eq(variables['createEnvironmentFound'], 'true'), eq(variables['CheckVariant1.VARIANT1_EXISTS'], 'false'))
+      inputs:
+        gitHubConnection: 'github-nextjsdummytest'
+        repositoryName: '$(Build.Repository.Name)'
+        id: '${{parameters.WebhookPRtest.number}}'
+        comment: |
+          🚀 **Creation Started for Static VARIANT1**
+          - The static web app creation process has been initiated.
+          - This operation typically takes a few minutes to complete.
+          - A follow-up comment will be posted here when the process is complete.
+    - task: GitHubComment@0
+      displayName: 'Comment GH - Starting Static Variant2'
+      condition: and(eq(variables['createEnvironmentBFound'], 'true'), eq(variables['CheckVariant2.VARIANT2_EXISTS'], 'false'))
+      inputs:
+        gitHubConnection: 'github-nextjsdummytest'
+        repositoryName: '$(Build.Repository.Name)'
+        id: '${{parameters.WebhookPRtest.number}}'
+        comment: |
+          🚀 **Creation Started for Static VARIANT2**
+          - The static web app creation process has been initiated.
+          - This operation typically takes a few minutes to complete.
+          - A follow-up comment will be posted here when the process is complete.
+    
+    - task: AzureCLI@2
+      displayName: createEmptyWebApp
+      inputs:
+        azureSubscription: 'radek-padrta-vs-msp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          # Create empty Azure Static Web App
+          
+          az staticwebapp create \
+            --name $(StaticEmptyWebApp) \
+            --resource-group $(AZURE_RESOURCE_GROUP) \
+            --location $(LOCATION) \
+            --sku Free \
+            --output none
+          
+          # Get the deployment token (API token)
+          token=$(az staticwebapp secrets list \
+            --name $(StaticEmptyWebApp) \
+            --resource-group $(AZURE_RESOURCE_GROUP) \
+            --query "properties.apiKey" -o tsv)
+          
+          # Store the token as a pipeline variable
+          echo "##vso[task.setvariable variable=AZURE_STATIC_WEB_APP_API_TOKEN;isSecret=true]$token"
+          
+          # Output the web app name for future reference
+          echo "##vso[task.setvariable variable=AZURE_STATIC_WEB_APP_NAME;isOutput=true]$(StaticEmptyWebApp)"
+          
+          # Print the web app name and a masked version of the token for debugging
+          echo "Created empty Static Web App: $(StaticEmptyWebApp)"
+          echo "API token (masked): ${token:0:5}...${token: -5}"
+
+    - checkout: self
+      submodules: true
+    - task: AzureStaticWebApp@0
+      name: "buildVariant1"
+      condition: eq(variables['CheckVariant1.VARIANT1_EXISTS'], 'false')
+      inputs:
+        app_location: '/'
+        api_location: ''
+        output_location: '.next'
+        azure_static_web_apps_api_token: $(AZURE_STATIC_WEB_APP_API_TOKEN)
+        deployment_environment: '${{parameters.WebhookPRtest.pull_request.id}}v1'
+
+    - task: AzureStaticWebApp@0
+      name: "buildVariant2"
+      condition: eq(variables['CheckVariant2.VARIANT2_EXISTS'], 'false')
+      inputs:
+        app_location: '/variant2'
+        api_location: ''
+        output_location: '.next'
+        azure_static_web_apps_api_token: $(AZURE_STATIC_WEB_APP_API_TOKEN)
+        deployment_environment: '${{parameters.WebhookPRtest.pull_request.id}}v2'
+
+    - task: AzureCLI@2
+      name: GetVariant1URL
+      inputs:
+        azureSubscription: 'radek-padrta-vs-msp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          URL=$(az staticwebapp environment list -n $(StaticEmptyWebApp) -o tsv --query "[?buildId=='variant1'].hostname")
+          echo "##vso[task.setvariable variable=VARIANT1_URL;isOutput=true]$URL"
+
+    - task: AzureCLI@2
+      name: GetVariant2URL
+      inputs:
+        azureSubscription: 'radek-padrta-vs-msp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          URL=$(az staticwebapp environment list -n $(StaticEmptyWebApp)  -o tsv --query "[?buildId=='variant2'].hostname")
+          echo "##vso[task.setvariable variable=VARIANT2_URL;isOutput=true]$URL"
+
+    - task: GitHubComment@0
+      displayName: 'Comment GH - Static Variant1 Deployed'
+      condition: eq(variables['createEnvironmentFound'], 'true')
+      inputs:
+        gitHubConnection: 'github-nextjsdummytest'
+        repositoryName: '$(Build.Repository.Name)'
+        id: '${{parameters.WebhookPRtest.number}}'
+        comment: |
+          ✅ **Static Web App VARIANT1 is ready!**
+          You can access the application at $(GetVariant1URL.VARIANT1_URL)
+          You can access the application at https://$(GetVariant1URL.VARIANT1_URL)
+          Thank you for your patience!
+
+    - task: GitHubComment@0
+      displayName: 'Comment GH - Static Variant2 Deployed'
+      condition: eq(variables['createEnvironmentBFound'], 'true')
+      inputs:
+        gitHubConnection: 'github-nextjsdummytest'
+        repositoryName: '$(Build.Repository.Name)'
+        id: '${{parameters.WebhookPRtest.number}}'
+        comment: |
+          ✅ **Static Web App VARIANT2 is ready!**
+          You can access the application at $(GetVariant2URL.VARIANT2_URL)
+          You can access the application at https://$(GetVariant2URL.VARIANT2_URL)
+          Thank you for your patience!

@@ -1,0 +1,288 @@
+trigger: none
+pr: none
+
+resources:
+  webhooks:
+  - webhook: WebhookPRtest         
+    connection: WebhookPRtestConnection
+    filters:
+     - path: "action"
+       value: "closed"
+  - webhook: WebhookPRtestUnlabeled
+    connection: WebhookPRtestUnlabeledConnection
+    filters:
+      - path: "action"
+        value: "unlabeled"  
+
+variables:
+  - name: AZURE_RESOURCE_GROUP
+    value: 'POCNextJS'
+  - name: APP_SERVICE_PLAN_NAME
+    value: 'testnextJSdummy'
+  - name: ACR_NAME
+    value: 'testnextjs'    
+  - ${{ if eq(parameters.WebhookPRtest.action, 'closed') }}:
+    - name: AZURE_WEBAPP_NAME
+      value: '${{parameters.WebhookPRtest.pull_request.id}}-variant1'
+    - name: AZURE_WEBAPPB_NAME
+      value: '${{parameters.WebhookPRtest.pull_request.id}}-variant2'
+  - ${{ if eq(parameters.WebhookPRtestUnlabeled.action, 'unlabeled') }}:
+    - name: AZURE_WEBAPP_NAME
+      value: '${{parameters.WebhookPRtestUnlabeled.pull_request.id}}-variant1'
+    - name: AZURE_WEBAPPB_NAME
+      value: '${{parameters.WebhookPRtestUnlabeled.pull_request.id}}-variant2'
+  
+
+stages:
+- stage: RemoveWebApp
+  jobs:
+  - job: DeletePREnvironment
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: Bash@3
+      displayName: 'Check for Create Variant1 label'
+      inputs:
+        targetType: 'inline'
+        script: |
+          create_env_found=false
+      
+          label0="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[0].name}}"
+          label1="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[1].name}}"
+          label2="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[2].name}}"
+          label3="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[3].name}}"
+          label4="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[4].name}}"
+          label5="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[5].name}}"
+
+          for label in "$label0" "$label1" "$label2" "$label3" "$label4" "$label5"; do
+            echo "Debug: Processing label: $label"
+            if [[ "$label" == "Create Variant1" ]]; then
+              create_env_found=true
+              break
+            fi
+          done
+
+          if $create_env_found; then
+            echo "##vso[task.setvariable variable=createEnvironmentFound]true"
+          else
+            echo "##vso[task.setvariable variable=createEnvironmentFound]false"
+          fi
+    
+    - task: Bash@3
+      displayName: 'Check for Create Variant2 label'
+      inputs:
+        targetType: 'inline'
+        script: |
+          create_env_found=false
+      
+          label0="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[0].name}}"
+          label1="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[1].name}}"
+          label2="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[2].name}}"
+          label3="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[3].name}}"
+          label4="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[4].name}}"
+          label5="${{parameters.WebhookPRtestUnlabeled.pull_request.labels[5].name}}"
+
+          for label in "$label0" "$label1" "$label2" "$label3" "$label4" "$label5"; do
+            echo "Debug: Processing label: $label"
+            if [[ "$label" == "Create Variant2" ]]; then
+              create_env_found=true
+              break
+            fi
+          done
+
+          if $create_env_found; then
+            echo "##vso[task.setvariable variable=createEnvironmentBFound]true"
+          else
+            echo "##vso[task.setvariable variable=createEnvironmentBFound]false"
+          fi
+               
+    - task: GitHubComment@0
+      condition: eq('${{ parameters.WebhookPRtest.action }}', 'closed')
+      inputs:
+        gitHubConnection: 'github-nextjsdummytest'
+        repositoryName: '$(Build.Repository.Name)'
+        id: '${{parameters.WebhookPRtest.number}}'
+        comment: |
+          🔚 This PR has been closed. 
+          
+          The associated temporary environment will be deleted shortly, if there is no tag "Create Environemnt. 
+          
+          Thank you!'
+  
+    - task: GitHubComment@0
+      condition: >
+        or(
+          eq(variables['createEnvironmentFound'], 'false'),
+          eq(variables['createEnvironmentBFound'], 'false')
+        )
+      inputs:
+        gitHubConnection: 'github-nextjsdummytest'
+        repositoryName: '$(Build.Repository.Name)'
+        id: '${{parameters.WebhookPRtestUnlabeled.number}}'
+        comment: |
+          🏷️ **Create Environment** label has been removed. 
+          
+          The temporary environment will be removed in few second, if there is no tag "Create Environemnt" or "Create Environemnt B". 
+          
+          Thank you!
+    - task: AzureCLI@2
+      displayName: 'A App REMOVE'
+      condition: >
+        or(
+          eq(variables['createEnvironmentFound'], 'false'),
+          eq('${{ parameters.WebhookPRtest.action }}', 'closed')
+        )
+      inputs:
+        azureSubscription: 'radek-padrta-vs-msp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -e  # Exit immediately if a command exits with a non-zero status
+         
+          echo "Checking if the web app exists: $(AZURE_WEBAPP_NAME)"
+          if az webapp show --name $(AZURE_WEBAPP_NAME) --resource-group $(AZURE_RESOURCE_GROUP) &>/dev/null; then
+            echo "Deleting Azure Web App: $(AZURE_WEBAPP_NAME)"
+            az webapp delete --name $(AZURE_WEBAPP_NAME) --resource-group $(AZURE_RESOURCE_GROUP) || { echo "Failed to delete Web App $(AZURE_WEBAPP_NAME)"; exit 1; }
+            echo "Web App $(AZURE_WEBAPP_NAME) deleted successfully"
+          else
+            echo "Web App $(AZURE_WEBAPP_NAME) not found in the resource group $(AZURE_RESOURCE_GROUP)"
+          fi
+          
+          
+
+          echo "All steps completed successfully"
+          
+          # Print out important information for debugging
+          echo "Resource Group: $(AZURE_RESOURCE_GROUP)"
+          
+          # List remaining resources in the resource group
+          echo "Remaining resources in the resource group:"
+          az resource list --resource-group $(AZURE_RESOURCE_GROUP) --output table
+
+    - task: AzureCLI@2
+      displayName: 'B App REMOVE'
+      condition: >
+        or(
+          eq(variables['createEnvironmentBFound'], 'false'),
+          eq('${{ parameters.WebhookPRtest.action }}', 'closed')
+        )
+      inputs:
+        azureSubscription: 'radek-padrta-vs-msp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -e  # Exit immediately if a command exits with a non-zero status
+         
+          echo "Checking if the web app exists: $(AZURE_WEBAPPB_NAME)"
+          if az webapp show --name $(AZURE_WEBAPPB_NAME) --resource-group $(AZURE_RESOURCE_GROUP) &>/dev/null; then
+            echo "Deleting Azure Web App: $(AZURE_WEBAPPB_NAME)"
+            az webapp delete --name $(AZURE_WEBAPPB_NAME) --resource-group $(AZURE_RESOURCE_GROUP) || { echo "Failed to delete Web App $(AZURE_WEBAPPB_NAME)"; exit 1; }
+            echo "Web App $(AZURE_WEBAPPB_NAME) deleted successfully"
+          else
+            echo "Web App $(AZURE_WEBAPPB_NAME) not found in the resource group $(AZURE_RESOURCE_GROUP)"
+          fi
+
+          echo "All steps completed successfully"
+          
+          # Print out important information for debugging
+          echo "Resource Group: $(AZURE_RESOURCE_GROUP)"
+          
+          # List remaining resources in the resource group
+          echo "Remaining resources in the resource group:"
+          az resource list --resource-group $(AZURE_RESOURCE_GROUP) --output table
+    
+    - task: AzureCLI@2
+      displayName: 'REMOVE ACR for Variant1'
+      condition: >
+        or(
+          eq(variables['createEnvironmentFound'], 'false'),
+          eq('${{ parameters.WebhookPRtest.action }}', 'closed')
+        )
+      inputs:
+        azureSubscription: 'radek-padrta-vs-msp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -e  # Exit immediately if a command exits with a non-zero status
+         
+           echo "Checking if Azure Container Registry exists"
+          if az acr show --name $(ACR_NAME) --resource-group $(AZURE_RESOURCE_GROUP) &>/dev/null; then
+            echo "Removing specific tag from ACR repository"
+            az acr repository delete --name $(ACR_NAME) --image myapp:nextjsPOC-variant1 --yes || { echo "Failed to delete tag from ACR repository"; exit 1; }
+            echo "Tag removed successfully from ACR repository"
+          else
+            echo "Azure Container Registry does not exist, skipping tag removal"
+          fi
+
+          echo "All steps completed successfully"
+          
+          # Print out important information for debugging
+          echo "Resource Group: $(AZURE_RESOURCE_GROUP)"
+          
+          # List remaining resources in the resource group
+          echo "Remaining resources in the resource group:"
+          az resource list --resource-group $(AZURE_RESOURCE_GROUP) --output table
+    
+    - task: AzureCLI@2
+      displayName: 'REMOVE ACR for Variant2'
+      condition: >
+        or(
+          eq(variables['createEnvironmentBFound'], 'false'),
+          eq('${{ parameters.WebhookPRtest.action }}', 'closed')
+        )
+      inputs:
+        azureSubscription: 'radek-padrta-vs-msp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -e  # Exit immediately if a command exits with a non-zero status
+         
+           echo "Checking if Azure Container Registry exists"
+          if az acr show --name $(ACR_NAME) --resource-group $(AZURE_RESOURCE_GROUP) &>/dev/null; then
+            echo "Removing specific tag from ACR repository"
+            az acr repository delete --name $(ACR_NAME) --image myapp:nextjsPOC-variant2 --yes || { echo "Failed to delete tag from ACR repository"; exit 1; }
+            echo "Tag removed successfully from ACR repository"
+          else
+            echo "Azure Container Registry does not exist, skipping tag removal"
+          fi
+
+          echo "All steps completed successfully"
+          
+          # Print out important information for debugging
+          echo "Resource Group: $(AZURE_RESOURCE_GROUP)"
+          
+          # List remaining resources in the resource group
+          echo "Remaining resources in the resource group:"
+          az resource list --resource-group $(AZURE_RESOURCE_GROUP) --output table
+
+    - task: AzureCLI@2
+      displayName: 'REMOVE App Service'
+      condition: >
+        and(
+          eq(variables['createEnvironmentFound'], 'false'),
+          eq(variables['createEnvironmentBFound'], 'false')
+        )
+      inputs:
+        azureSubscription: 'radek-padrta-vs-msp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          set -e  # Exit immediately if a command exits with a non-zero status
+         
+          echo "Checking if App Service Plan exists"
+          if az appservice plan show --name $(APP_SERVICE_PLAN_NAME) --resource-group $(AZURE_RESOURCE_GROUP) &>/dev/null; then
+            echo "Deleting App Service Plan"
+            az appservice plan delete --name $(APP_SERVICE_PLAN_NAME) --resource-group $(AZURE_RESOURCE_GROUP) --yes || { echo "Failed to delete App Service Plan"; exit 1; }
+            echo "App Service Plan deleted successfully"
+          else
+            echo "App Service Plan does not exist, skipping deletion"
+          fi
+
+          echo "All steps completed successfully"
+          
+          # Print out important information for debugging
+          echo "Resource Group: $(AZURE_RESOURCE_GROUP)"
+          
+          # List remaining resources in the resource group
+          echo "Remaining resources in the resource group:"
+          az resource list --resource-group $(AZURE_RESOURCE_GROUP) --output table

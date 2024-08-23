@@ -1,0 +1,35 @@
+parameters:
+  - name: labelToCheck
+    type: string
+  - name: variableName
+    type: string
+  - name: prLabels
+    type: object
+    default: []
+
+steps:
+- task: Bash@3
+  displayName: 'Check for ${{ parameters.labelToCheck }} label'
+  inputs:
+    targetType: 'inline'
+    script: |
+      create_env_found=false
+      
+      label0="${{ parameters.prLabels[0].name }}"
+      label1="${{ parameters.prLabels[1].name }}"
+      label2="${{ parameters.prLabels[2].name }}"
+      label3="${{ parameters.prLabels[3].name }}"
+      label4="${{ parameters.prLabels[4].name }}"
+      label5="${{ parameters.prLabels[5].name }}"
+      for label in "$label0" "$label1" "$label2" "$label3" "$label4" "$label5"; do
+        echo "Processing label: $label"
+        if [[ "$label" == "${{ parameters.labelToCheck }}" ]]; then
+          create_env_found=true
+          break
+        fi
+      done
+      if $create_env_found; then
+        echo "##vso[task.setvariable variable=${{ parameters.variableName }}]true"
+      else
+        echo "##vso[task.setvariable variable=${{ parameters.variableName }}]false"
+      fi
