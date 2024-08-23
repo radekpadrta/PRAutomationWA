@@ -10,7 +10,7 @@ export default function Home() {
 
   return (
     <div>
-      <h1>Dummy NextJS App B</h1>
+      <h1>Dummy NextJS App B etst</h1>
       <p>{message}</p>
       <p>Environment variable: {process.env.NEXT_PUBLIC_MESSAGE}</p>
     </div>
